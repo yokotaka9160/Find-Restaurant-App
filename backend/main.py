@@ -13,97 +13,136 @@
     GET /api/geocode?q=東京駅                           # 地名 → 座標の候補
 """
 
+# 複数の Yelp 検索を並行実行するための asyncio
 import asyncio
+# 切り上げ計算に使う math
 import math
+# キャッシュの経過時間を測るための time
 import time
+# 固定値の型（Literal）と「値または None」の型（Optional）
 from typing import Literal, Optional
 
+# FastAPI 本体・HTTP エラー・クエリパラメータ定義
 from fastapi import FastAPI, HTTPException, Query
+# CORS（別オリジンからのアクセス許可）のミドルウェア
 from fastapi.middleware.cors import CORSMiddleware
+# リダイレクト応答
 from fastapi.responses import RedirectResponse
+# レスポンスの型を定義する Pydantic の基底クラス
 from pydantic import BaseModel
 
+# ルート検索・地名検索・距離計算
 import routing
+# Yelp API クライアント
 import yelp
+# モック店舗データと、絞り込み・ジャンル集計・距離付与の関数
 from shops import SHOPS, filter_shops, genre_facets, with_distance
 
 # ルート検索で Yelp を呼ぶ地点数の上限（API の呼び出し回数を抑える）
 ROUTE_MAX_SAMPLES = 10
+# ルート検索で同時に実行する Yelp リクエスト数の上限
 ROUTE_YELP_CONCURRENCY = 3
+# Yelp の検索半径の上限（m）
 YELP_MAX_RADIUS_M = 40000
 
+# FastAPI アプリを作成する
 app = FastAPI(title="FindRestr API")
 
 # Vite の開発サーバー（localhost の任意ポート）からのアクセスを許可
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
-    allow_methods=["GET"],
-    allow_headers=["*"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",  # 許可するオリジン
+    allow_methods=["GET"],  # GET のみ許可
+    allow_headers=["*"],  # ヘッダーはすべて許可
 )
 
 
 class Category(BaseModel):
+    """店舗のカテゴリ"""
+
     alias: str  # Yelp のカテゴリ ID（例: sushi）
     title: str  # 日本語の表示名（categories_ja.py で変換。対訳がなければ Yelp の英語名）
 
 
 class GenreFacet(Category):
+    """ジャンルの選択肢（件数付きのカテゴリ）"""
+
     count: int  # このカテゴリを持つ店舗数
 
 
 class Shop(BaseModel):
-    id: str
-    name: str
-    prefecture: str
-    area: str
+    """店舗 1 件（フロントの Restaurant 型と 1:1）"""
+
+    id: str  # 店舗 ID
+    name: str  # 店名
+    prefecture: str  # 都道府県
+    area: str  # 市区町村・エリア
     # 現在地検索では現在地からの距離、ルート検索ではルートからの距離（m）
     distance: Optional[float] = None
     along: Optional[float] = None  # ルート検索のみ：出発地からの道のり（m）。ルート順の並び替え用
-    lat: Optional[float] = None
-    lng: Optional[float] = None
+    lat: Optional[float] = None  # 緯度
+    lng: Optional[float] = None  # 経度
     genre: str  # 代表ジャンル（categories の先頭の title）
-    categories: list[Category]
+    categories: list[Category]  # カテゴリ一覧
     budget: int  # 1人あたりの平均予算（円）。Yelp の場合は価格帯からの目安
-    rating: float
-    review_count: int
-    description: str
-    image: str
+    rating: float  # 評価
+    review_count: int  # レビュー数
+    description: str  # 説明文
+    image: str  # 画像 URL
     url: Optional[str] = None  # Yelp の店舗ページ
 
 
 class ShopsResponse(BaseModel):
+    """/api/shops のレスポンス"""
+
     total: int  # 絞り込み前の総件数
     items: list[Shop]  # 絞り込み後の店舗
     # ジャンルの選択肢。エリア内の全店舗（ジャンル・評価・予算で絞り込む前）のカテゴリを集計したもの
     genres: list[GenreFacet]
-    source: Literal["yelp", "mock"]
+    source: Literal["yelp", "mock"]  # データの取得元
 
 
 class RouteInfo(BaseModel):
+    """ルートの形状と距離・所要時間"""
+
     coordinates: list[tuple[float, float]]  # [lat, lng] の列（地図描画用）
-    distance_m: float
-    duration_s: float
+    distance_m: float  # 総距離（m）
+    duration_s: float  # 所要時間（秒）
 
 
 class RouteShopsResponse(ShopsResponse):
+    """/api/shops/route のレスポンス（ShopsResponse にルート情報を追加）"""
+
     route: RouteInfo
 
 
 class GeocodeResult(BaseModel):
-    name: str
-    lat: float
-    lng: float
+    """地名検索の結果 1 件"""
+
+    name: str  # 地名・住所
+    lat: float  # 緯度
+    lng: float  # 経度
 
 
 @app.get("/", include_in_schema=False)
 def root() -> RedirectResponse:
+    """トップページへのアクセスを /docs にリダイレクトする。
+
+    引数: なし
+    返り値: /docs へのリダイレクト応答
+    """
     # API サーバーのトップには画面がないので、API ドキュメントへ案内する（アプリの画面はフロント側）
     return RedirectResponse("/docs")
 
 
 @app.get("/api/health")
 def health() -> dict:
+    """死活確認。
+
+    引数: なし
+    返り値: {"status": "ok", "source": "yelp" または "mock"}
+    """
+    # API キーがあれば yelp、なければ mock
     return {"status": "ok", "source": "yelp" if yelp.api_key() else "mock"}
 
 
@@ -120,19 +159,31 @@ async def list_shops(
     budget_min: Optional[int] = Query(None, ge=0, description="予算の下限（円）"),
     budget_max: Optional[int] = Query(None, ge=0, description="予算の上限（円）。未指定なら上限なし"),
 ) -> ShopsResponse:
+    """エリアまたは現在地周辺の店舗を検索し、条件で絞り込んで返す。
+
+    引数: クエリパラメータ（各 Query の description を参照）
+    返り値: 店舗一覧・総件数・ジャンルの選択肢・取得元
+    例外: HTTPException(502) Yelp API の呼び出しに失敗したとき
+    """
+    # 緯度・経度が両方あれば現在地検索
     near_me = lat is not None and lng is not None
     if near_me:
+        # 現在地検索では都道府県・エリアを使わない
         prefecture = area = None
     else:
+        # エリア検索では都道府県の既定値を補う
         prefecture = prefecture or yelp.DEFAULT_PREFECTURE
 
     if yelp.api_key():
+        # API キーがあれば Yelp から取得する
         try:
             total, shops = await yelp.search_shops(prefecture, area, lat, lng, radius_m=radius)
         except yelp.YelpError as e:
+            # Yelp の失敗は 502 として返す
             raise HTTPException(status_code=502, detail=str(e)) from e
         source = "yelp"
     else:
+        # なければモックデータを使う（現在地検索なら距離を付ける）
         total, shops = len(SHOPS), with_distance(SHOPS, lat, lng) if near_me else SHOPS
         source = "mock"
 
@@ -141,8 +192,9 @@ async def list_shops(
         shops,
         prefecture=prefecture,
         area=area,
-        max_distance=radius if near_me else None,
+        max_distance=radius if near_me else None,  # 現在地検索なら半径で絞る
     )
+    # エリア内の店舗をジャンル・評価・予算で絞り込む
     items = filter_shops(
         in_area,
         genres=genre,
@@ -151,6 +203,7 @@ async def list_shops(
         budget_min=budget_min,
         budget_max=budget_max,
     )
+    # レスポンスを組み立てて返す
     return ShopsResponse(total=total, items=items, genres=genre_facets(in_area), source=source)
 
 
@@ -171,26 +224,42 @@ async def route_shops(
 
     Yelp はルート上の数地点（最大 ROUTE_MAX_SAMPLES）を中心に検索し、結果をまとめてから
     ルートまでの距離で絞り込む。ルートと候補店舗は ROUTE_CACHE_TTL_S 秒キャッシュする。
+
+    引数: クエリパラメータ（各 Query の description を参照）
+    返り値: 店舗一覧・総件数・ジャンルの選択肢・取得元・ルート情報
+    例外: HTTPException ルート検索（404/502）や Yelp（502）に失敗したとき
     """
+    # キャッシュのキー（座標は小数 5 桁≒1m に丸める。Yelp/モックの切り替えも区別する）
     key = (round(olat, 5), round(olng, 5), round(dlat, 5), round(dlng, 5), buffer, bool(yelp.api_key()))
+    # キャッシュを引く
     cached = _route_cache.get(key)
     if cached and time.monotonic() - cached[0] < ROUTE_CACHE_TTL_S:
+        # 有効期限内ならキャッシュの値を使う
         _, route, candidates, source = cached
     else:
+        # なければルートと候補店舗を取得する
         route, candidates, source = await _route_candidates(olat, olng, dlat, dlng, buffer)
+        # 上限に達していたら古いものを 1 件捨てる
         if len(_route_cache) >= ROUTE_CACHE_MAX:
             _route_cache.pop(next(iter(_route_cache)))  # 一番古いものを捨てる
+        # 取得時刻とともにキャッシュする
         _route_cache[key] = (time.monotonic(), route, candidates, source)
+    # 距離計算用のルート形状を作る
     geometry = routing.RouteGeometry(route.coordinates)
 
+    # ルートから buffer 以内の店舗
     near_route = []
     for shop in candidates:
+        # 座標がない店舗はスキップ
         if shop.get("lat") is None or shop.get("lng") is None:
             continue
+        # ルートまでの距離と、出発地からの道のりを求める
         distance, along = geometry.locate((shop["lat"], shop["lng"]))
+        # buffer 以内なら距離・道のりを付けて追加する
         if distance <= buffer:
             near_route.append({**shop, "distance": distance, "along": along})
 
+    # ジャンル・評価・予算で絞り込む
     items = filter_shops(
         near_route,
         genres=genre,
@@ -199,10 +268,11 @@ async def route_shops(
         budget_min=budget_min,
         budget_max=budget_max,
     )
+    # レスポンスを組み立てて返す
     return RouteShopsResponse(
-        total=len(candidates),
+        total=len(candidates),  # ルート周辺で取得した候補の数
         items=items,
-        genres=genre_facets(near_route),
+        genres=genre_facets(near_route),  # ルート沿いの店舗からジャンルの選択肢を作る
         source=source,
         route=RouteInfo(
             coordinates=route.coordinates,
@@ -213,43 +283,80 @@ async def route_shops(
 
 
 # ルート検索の結果（ルートと候補店舗）のキャッシュ。ジャンル等の変更のたびに OSRM / Yelp を呼ばないため
-ROUTE_CACHE_TTL_S = 600
-ROUTE_CACHE_MAX = 32
+ROUTE_CACHE_TTL_S = 600  # 有効期限（秒）
+ROUTE_CACHE_MAX = 32  # 最大件数
+# キー → (取得時刻, ルート, 候補店舗, 取得元)
 _route_cache: dict[tuple, tuple[float, routing.Route, list[dict], str]] = {}
 
 
 async def _route_candidates(
     olat: float, olng: float, dlat: float, dlng: float, buffer: int
 ) -> tuple[routing.Route, list[dict], str]:
+    """ルートを取得し、ルート周辺の候補店舗を集める。
+
+    引数:
+        olat, olng: 出発地の緯度・経度
+        dlat, dlng: 目的地の緯度・経度
+        buffer: ルートからの距離（m）。Yelp の検索半径の決定に使う
+    返り値:
+        (ルート, 候補店舗のリスト, 取得元 "yelp" / "mock")
+    例外:
+        HTTPException: ルート検索や Yelp の呼び出しに失敗したとき
+    """
     try:
+        # OSRM でルートを取得する
         route = await routing.fetch_route((olat, olng), (dlat, dlng))
     except routing.RoutingError as e:
+        # RoutingError のステータスコードをそのまま HTTP エラーにする
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    # 距離計算・サンプリング用のルート形状
     geometry = routing.RouteGeometry(route.coordinates)
 
     if yelp.api_key():
         # 検索円がルートに沿って重なるよう、間隔と半径を決める
+        # 半径は buffer の 2 倍以上・最低 1500m
         radius = max(buffer * 2, 1500)
+        # 地点の間隔：最大地点数に収まる間隔か半径の大きい方
         spacing = max(geometry.length / (ROUTE_MAX_SAMPLES - 1), radius)
+        # 間隔の 0.75 倍以上にして円が重なるようにし、Yelp の上限で抑える
         radius = min(YELP_MAX_RADIUS_M, max(radius, math.ceil(spacing * 0.75)))
+        # 同時実行数を制限するセマフォ
         semaphore = asyncio.Semaphore(ROUTE_YELP_CONCURRENCY)
 
         async def search(p: routing.LatLng) -> list[dict]:
+            """1 地点を中心に Yelp を検索する。
+
+            引数: p 中心地点 (lat, lng)
+            返り値: 店舗のリスト
+            """
+            # セマフォで同時実行数を制限しつつ検索し、店舗リストだけを返す
             async with semaphore:
                 return (await yelp.search_shops(None, None, p[0], p[1], radius_m=radius))[1]
 
         try:
+            # ルート上の各地点で並行して検索する
             batches = await asyncio.gather(*(search(p) for p in geometry.sample(spacing)))
         except yelp.YelpError as e:
+            # Yelp の失敗は 502 として返す
             raise HTTPException(status_code=502, detail=str(e)) from e
+        # 重複する店舗を id でまとめる
         candidates = list({s["id"]: s for batch in batches for s in batch}.values())
         return route, candidates, "yelp"
+    # API キーがなければモックデータを候補にする
     return route, SHOPS, "mock"
 
 
 @app.get("/api/geocode", response_model=list[GeocodeResult])
 async def geocode(q: str = Query(..., min_length=1, max_length=200, description="地名・住所・駅名など")):
+    """地名から座標の候補を返す。
+
+    引数: q 地名・住所・駅名など（1〜200 文字）
+    返り値: 候補のリスト [{name, lat, lng}]
+    例外: HTTPException 地名検索に失敗したとき
+    """
     try:
+        # Nominatim で地名検索する
         return await routing.geocode(q)
     except routing.RoutingError as e:
+        # RoutingError のステータスコードをそのまま HTTP エラーにする
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e

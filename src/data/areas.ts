@@ -3,16 +3,23 @@
  * 選択値はそのままバックエンド経由で Yelp の location（"<エリア>, <都道府県>"）に渡ります。
  */
 
+/** 都道府県 */
 export interface Prefecture {
+  /** 都道府県名（例: 東京都） */
   name: string
+  /** 選択肢に出す市区町村・エリア名の一覧 */
   cities: string[]
 }
 
+/** 地方（都道府県のまとまり） */
 export interface Region {
+  /** 地方名（例: 関東） */
   name: string
+  /** その地方に属する都道府県 */
   prefectures: Prefecture[]
 }
 
+/** 地方 → 都道府県 → 市区町村 の階層データ（都道府県の選択肢をグループ表示するのに使う） */
 export const REGIONS: Region[] = [
   {
     name: "北海道・東北",
@@ -115,10 +122,18 @@ export const REGIONS: Region[] = [
   },
 ]
 
+/** 全地方の都道府県を 1 つの配列に平らにしたもの */
 export const PREFECTURES: Prefecture[] = REGIONS.flatMap((r) => r.prefectures)
 
+/** 初期表示で選択されている都道府県 */
 export const DEFAULT_PREFECTURE = "東京都"
 
+/**
+ * 指定した都道府県の市区町村一覧を返す。
+ * @param prefecture 都道府県名
+ * @returns 市区町村名の配列（該当する都道府県がなければ空配列）
+ */
 export function citiesOf(prefecture: string): string[] {
+  // 名前が一致する都道府県を探し、見つかればその cities、なければ空配列を返す
   return PREFECTURES.find((p) => p.name === prefecture)?.cities ?? []
 }

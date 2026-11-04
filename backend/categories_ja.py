@@ -5,8 +5,10 @@ Yelp は locale=ja_JP を指定してもカテゴリ名を英語で返し、日�
 表にない alias は Yelp の英語名のまま表示する（ja_title の fallback）。
 """
 
+# 型ヒントを文字列として遅延評価する（古い Python でも新しい型表記を使えるようにする）
 from __future__ import annotations
 
+# alias（キー）→ 日本語の表示名（値）の対訳表
 CATEGORY_JA: dict[str, str] = {
     # 和食
     "japanese": "和食",
@@ -181,4 +183,13 @@ CATEGORY_JA: dict[str, str] = {
 
 
 def ja_title(alias: str, fallback: str) -> str:
+    """カテゴリ alias を日本語の表示名に変換する。
+
+    引数:
+        alias: Yelp のカテゴリ ID（例: sushi）
+        fallback: 対訳がないときに返す名前（通常は Yelp の英語名）
+    返り値:
+        日本語の表示名（対訳表になければ fallback）
+    """
+    # 対訳表から引き、なければ fallback を返す
     return CATEGORY_JA.get(alias, fallback)
