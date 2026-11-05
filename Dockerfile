@@ -1,6 +1,6 @@
 # ---------- 共通：依存関係のインストール ----------
 FROM node:22-alpine AS base
-RUN npm install -g pnpm@10.34.3
+RUN npm install -g pnpm@10.34.9
 WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 # 依存を追加した後は pnpm-lock.yaml が古い可能性があるため frozen にはしない

@@ -849,17 +849,12 @@ function RestaurantCard({
               ({r.review_count.toLocaleString("ja-JP")})
             </span>
           </span>
-          {r.url ? (
-            // Yelp ページがあればリンクボタン（新しいタブ）
+          {/* Yelp ページがあればリンクボタン（新しいタブ） */}
+          {r.url && (
             <Button variant="outline" size="sm" asChild>
               <a href={r.url} target="_blank" rel="noreferrer">
                 Yelpで見る
               </a>
-            </Button>
-          ) : (
-            // なければ「詳しく」ボタン（現状は動作なし）
-            <Button variant="outline" size="sm">
-              詳しく
             </Button>
           )}
         </div>

@@ -130,6 +130,7 @@ flowchart LR
 | 変数 | 内容 | 既定値 |
 | --- | --- | --- |
 | `YELP_API_KEY` | Yelp Fusion API のキー（[発行ページ](https://www.yelp.com/developers/v3/manage_app)） | 未設定ならサンプルデータ |
+| `FRONTEND_ORIGIN` | CORS で許可するフロントエンドの URL（公開先。カンマ区切りで複数可） | 未設定なら localhost のみ許可 |
 | `OSRM_URL` | OSRM サーバーの URL | `https://router.project-osrm.org` |
 | `OSRM_PROFILE` | OSRM のプロファイル | `driving` |
 | `VITE_API_BASE` | フロントから見た API の URL | `http://localhost:8000` |

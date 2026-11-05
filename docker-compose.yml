@@ -8,6 +8,8 @@ services:
     environment:
       # ルートの .env に YELP_API_KEY=... を書くと Yelp Fusion API を使う（未設定ならモックデータ）
       YELP_API_KEY: ${YELP_API_KEY:-}
+      # CORS で許可するフロントエンドの URL（カンマ区切り）。localhost は常に許可
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-}
       # ルート検索（OSRM）。未設定なら公開デモサーバー（車ルート・低頻度の利用のみ）
       OSRM_URL: ${OSRM_URL:-}
       OSRM_PROFILE: ${OSRM_PROFILE:-}

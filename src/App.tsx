@@ -121,7 +121,7 @@ function Home({ onStart }: { onStart: () => void }) {
           {/* アプリ名 */}
           <h1>FindRestr</h1>
           {/* キャッチコピー */}
-          <p>Find and Book Restaurants</p>
+          <p>Find Restaurants on Your Route</p>
           {/* 押すと onStart を呼んで検索画面へ進む */}
           <button className="primary-button start-button" onClick={onStart}>
             Start

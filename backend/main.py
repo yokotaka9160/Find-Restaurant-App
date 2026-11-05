@@ -17,6 +17,8 @@
 import asyncio
 # 切り上げ計算に使う math
 import math
+# 環境変数を読むための os
+import os
 # キャッシュの経過時間を測るための time
 import time
 # 固定値の型（Literal）と「値または None」の型（Optional）
@@ -38,9 +40,6 @@ import yelp
 # モック店舗データと、絞り込み・ジャンル集計・距離付与の関数
 from shops import SHOPS, filter_shops, genre_facets, with_distance
 
-import os
-from fastapi.middleware.cors import CORSMiddleware
-
 # ルート検索で Yelp を呼ぶ地点数の上限（API の呼び出し回数を抑える）
 ROUTE_MAX_SAMPLES = 10
 # ルート検索で同時に実行する Yelp リクエスト数の上限
@@ -51,16 +50,18 @@ YELP_MAX_RADIUS_M = 40000
 # FastAPI アプリを作成する
 app = FastAPI(title="FindRestr API")
 
-# Vite の開発サーバー（localhost の任意ポート）からのアクセスを許可
+# CORS で許可する公開先のフロントエンドの URL（環境変数 FRONTEND_ORIGIN、カンマ区切りで複数可）
 FRONTEND_ORIGINS = [o.strip() for o in os.getenv("FRONTEND_ORIGIN", "").split(",") if o.strip()]
 
+# 公開先のフロントエンドと、ローカル開発（localhost の任意ポート）からのアクセスを許可
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=FRONTEND_ORIGINS,                              # 公開先（Render の URL）
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",  # ローカル開発用は今まで通り
+    allow_origins=FRONTEND_ORIGINS,  # 公開先（Render の URL）
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",  # ローカル開発用
     allow_methods=["GET"],  # GET のみ許可
     allow_headers=["*"],  # ヘッダーはすべて許可
 )
+
 
 class Category(BaseModel):
     """店舗のカテゴリ"""
