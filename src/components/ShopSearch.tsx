@@ -2,30 +2,23 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 // 画面で使う lucide-react のアイコンを読み込む
 import {
-  Car, // 駐車場
   ChevronLeft, // 戻る矢印
   Heart, // お気に入り
   LayoutGrid, // リスト表示
   Loader2, // 読み込み中
-  LocateFixed, // 現在地
   Map as MapIcon, // マップ表示（組み込みの Map と名前が衝突しないよう別名）
   MapPin, // 地図ピン
   RotateCcw, // リセット
   Route, // ルート
   SearchX, // 該当なし
   SlidersHorizontal, // 絞り込み
-  Star, // 評価の星
-  Users, // 大人数
   UtensilsCrossed, // ロゴ（フォークとナイフ）
-  X, // 閉じる
 } from "lucide-react"
 
 // ボタン部品
 import { Button } from "@/components/ui/button"
 // カード部品一式
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-// チェックボックス部品
-import { Checkbox } from "@/components/ui/checkbox"
 // ラベル部品
 import { Label } from "@/components/ui/label"
 // セレクトボックス部品一式
@@ -38,10 +31,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-// スライダー部品
-import { Slider } from "@/components/ui/slider"
 // お気に入りの一覧
 import FavoritesView from "@/components/FavoritesView"
+// 絞り込み条件の入力欄（現在地・設備・予算・ジャンル・評価）
+import {
+  BudgetField,
+  FacilityField,
+  GenreField,
+  LocationField,
+  RatingField,
+} from "@/components/FilterFields"
 // 店舗カード
 import RestaurantCard from "@/components/RestaurantCard"
 // ルート検索の入力欄
@@ -50,25 +49,15 @@ import RouteSearchFields from "@/components/RouteSearchFields"
 import { REGIONS, citiesOf } from "@/data/areas"
 // お気に入りを管理するフック
 import { useFavorites } from "@/hooks/useFavorites"
-// 現在地を取得するフック
-import { useGeolocation } from "@/hooks/useGeolocation"
 // 検索条件の定数・API 関数・整形関数・型
 import {
   ALL_AREAS,
   ApiError,
-  BUDGET_MAX,
-  BUDGET_MIN,
-  BUDGET_STEP,
   DEFAULT_FILTERS,
-  RADIUS_MAX_KM,
-  RADIUS_MIN_KM,
-  RATING_MAX,
-  RATING_MIN,
   SORT_OPTIONS,
   fetchShops,
   formatDistance,
   formatDuration,
-  formatYen,
   isRouteReady,
   sortRestaurants,
   type GenreFacet,
@@ -81,9 +70,6 @@ import {
 
 // 地図（Leaflet）は地図表示に切り替えたときだけ読み込む
 const ShopMap = lazy(() => import("@/components/ShopMap"))
-
-/** ジャンルの選択肢を最初に表示する数（残りは「もっと見る」） */
-const GENRE_PREVIEW_COUNT = 12
 
 /* ------------------------------------------------------------------ */
 /* 画面本体：検索条件を useState で保持し、変更のたびに FastAPI から再取得する */
@@ -539,7 +525,7 @@ interface FilterPanelProps {
 }
 
 /**
- * 検索条件パネル（検索方法・エリア/ルート・予算・ジャンル・評価）。
+ * 検索条件パネル（検索方法・エリア/ルート・設備・予算・ジャンル・評価）。
  * @param props FilterPanelProps を参照
  * @returns パネルの JSX
  */
@@ -550,13 +536,6 @@ function FilterPanel({
   onReset,
   resetDisabled,
 }: FilterPanelProps) {
-  // 予算の下限・上限
-  const [minB, maxB] = filters.budget
-  // 評価の下限・上限
-  const [minR, maxR] = filters.rating
-  // 現在地取得フック
-  const geo = useGeolocation()
-
   /**
    * 都道府県を変更する（市区町村は「全域」に戻す）。
    * @param prefecture 新しい都道府県名
@@ -566,26 +545,6 @@ function FilterPanel({
     onChange("prefecture", prefecture)
     onChange("area", ALL_AREAS)
   }
-
-  // ジャンルをすべて表示するか
-  const [showAllGenres, setShowAllGenres] = useState(false)
-  // 表示するジャンル（すべて or 先頭 GENRE_PREVIEW_COUNT 件）
-  const visibleGenres = showAllGenres
-    ? genreOptions
-    : genreOptions.slice(0, GENRE_PREVIEW_COUNT)
-
-  /**
-   * ジャンルの選択を切り替える。
-   * @param alias ジャンルの ID
-   * @param checked チェックされたら true
-   * @returns なし
-   */
-  const toggleGenre = (alias: string, checked: boolean) =>
-    onChange(
-      "genres",
-      // チェックなら追加、外したら取り除く
-      checked ? [...filters.genres, alias] : filters.genres.filter((g) => g !== alias),
-    )
 
   return (
     <Card className="gap-5 py-5">
@@ -638,239 +597,73 @@ function FilterPanel({
           />
         ) : (
           /* エリア：現在地 or 都道府県 → 市区町村 */
-          <div className="space-y-2">
-            <Label htmlFor="prefecture">エリア</Label>
-            {filters.currentLocation ? (
-              // 現在地で検索中：半径の表示・解除ボタン・半径スライダー
-              <div className="space-y-3 rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-sm">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-2">
-                    <LocateFixed className="size-4 text-primary" />
-                    現在地から
-                    <span className="font-medium tabular-nums text-primary">
-                      {filters.radiusKm}km
-                    </span>
-                    以内
-                  </span>
-                  {/* 現在地検索を解除して都道府県選択に戻す */}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-6"
-                    aria-label="現在地での検索を解除"
-                    onClick={() => onChange("currentLocation", null)}
-                  >
-                    <X />
-                  </Button>
-                </div>
-                {/* 半径（km）のスライダー */}
-                <Slider
-                  min={RADIUS_MIN_KM}
-                  max={RADIUS_MAX_KM}
-                  step={1}
-                  value={[filters.radiusKm]}
-                  thumbLabels={["現在地からの距離（km）"]}
-                  onValueChange={(v) => onChange("radiusKm", v[0])}
-                />
-                {/* スライダーの両端の目盛り */}
-                <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
-                  <span>{RADIUS_MIN_KM}km</span>
-                  <span>{RADIUS_MAX_KM}km</span>
-                </div>
-              </div>
-            ) : (
-              <>
-                {/* 都道府県の選択（地方ごとにグループ表示） */}
-                <Select value={filters.prefecture} onValueChange={changePrefecture}>
-                  <SelectTrigger id="prefecture" className="bg-background">
-                    <MapPin className="text-muted-foreground" />
-                    <SelectValue placeholder="都道府県を選択" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-80">
-                    {REGIONS.map((region) => (
-                      <SelectGroup key={region.name}>
-                        {/* 地方名の見出し */}
-                        <SelectLabel>{region.name}</SelectLabel>
-                        {/* その地方の都道府県 */}
-                        {region.prefectures.map((p) => (
-                          <SelectItem key={p.name} value={p.name}>
-                            {p.name}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {/* 市区町村の選択 */}
-                <Select value={filters.area} onValueChange={(v) => onChange("area", v)}>
-                  <SelectTrigger aria-label="市区町村" className="bg-background">
-                    <SelectValue placeholder="市区町村を選択" />
-                  </SelectTrigger>
-                  <SelectContent className="max-h-80">
-                    {/* 都道府県全域 */}
-                    <SelectItem value={ALL_AREAS}>{filters.prefecture}全域</SelectItem>
-                    {/* 選択中の都道府県の市区町村 */}
-                    {citiesOf(filters.prefecture).map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {c}
+          <LocationField
+            labelFor="prefecture"
+            location={filters.currentLocation}
+            radiusKm={filters.radiusKm}
+            onLocationChange={(p) => onChange("currentLocation", p)}
+            onRadiusChange={(km) => onChange("radiusKm", km)}
+          >
+            {/* 都道府県の選択（地方ごとにグループ表示） */}
+            <Select value={filters.prefecture} onValueChange={changePrefecture}>
+              <SelectTrigger id="prefecture" className="bg-background">
+                <MapPin className="text-muted-foreground" />
+                <SelectValue placeholder="都道府県を選択" />
+              </SelectTrigger>
+              <SelectContent className="max-h-80">
+                {REGIONS.map((region) => (
+                  <SelectGroup key={region.name}>
+                    {/* 地方名の見出し */}
+                    <SelectLabel>{region.name}</SelectLabel>
+                    {/* その地方の都道府県 */}
+                    {region.prefectures.map((p) => (
+                      <SelectItem key={p.name} value={p.name}>
+                        {p.name}
                       </SelectItem>
                     ))}
-                  </SelectContent>
-                </Select>
-              </>
-            )}
-            {/* 現在地を使っていなければ「現在地から探す」ボタンを出す */}
-            {!filters.currentLocation && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full"
-                // 取得できたら現在地を検索条件に入れる
-                onClick={() => geo.locate((p) => onChange("currentLocation", p))}
-                disabled={geo.locating}
-              >
-                {geo.locating ? <Loader2 className="animate-spin" /> : <LocateFixed />}
-                {geo.locating ? "現在地を取得中…" : "現在地から探す"}
-              </Button>
-            )}
-            {/* 現在地取得のエラー */}
-            {geo.error && (
-              <p className="text-xs text-destructive" role="alert">
-                {geo.error}
-              </p>
-            )}
-          </div>
+                  </SelectGroup>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* 市区町村の選択 */}
+            <Select value={filters.area} onValueChange={(v) => onChange("area", v)}>
+              <SelectTrigger aria-label="市区町村" className="bg-background">
+                <SelectValue placeholder="市区町村を選択" />
+              </SelectTrigger>
+              <SelectContent className="max-h-80">
+                {/* 都道府県全域 */}
+                <SelectItem value={ALL_AREAS}>{filters.prefecture}全域</SelectItem>
+                {/* 選択中の都道府県の市区町村 */}
+                {citiesOf(filters.prefecture).map((c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </LocationField>
         )}
 
         {/* 設備（駐車場・大人数） */}
-        <fieldset className="space-y-3">
-          <legend className="mb-3 text-sm leading-none font-medium">設備</legend>
-          {/* [検索条件の項目, id, 表示名, アイコン] の組からチェックボックスを作る */}
-          {(
-            [
-              ["parking", "facility-parking", "駐車場あり", Car],
-              ["groups", "facility-groups", "大人数（4人以上）OK", Users],
-            ] as const
-          ).map(([key, id, label, Icon]) => (
-            <div key={key} className="flex items-center gap-2">
-              {/* c は true/false/"indeterminate" なので true のみ選択扱い */}
-              <Checkbox
-                id={id}
-                checked={filters[key]}
-                onCheckedChange={(c) => onChange(key, c === true)}
-              />
-              <Label htmlFor={id} className="cursor-pointer font-normal">
-                <Icon className="size-4 text-muted-foreground" />
-                {label}
-              </Label>
-            </div>
-          ))}
-          {/* Yelp の情報がない店は条件に合うか分からないので除外されることを伝える */}
-          <p className="text-xs text-muted-foreground">
-            Yelp に設備の情報がないお店は表示されません
-          </p>
-        </fieldset>
+        <FacilityField
+          parking={filters.parking}
+          groups={filters.groups}
+          onChange={(key, value) => onChange(key, value)}
+        />
 
         {/* 予算 */}
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between">
-            <Label>予算（1人あたり）</Label>
-            {/* 選択中の範囲。上限が最大なら「◯円以上」 */}
-            <span className="text-sm font-medium tabular-nums text-primary">
-              {formatYen(minB)} 〜 {maxB >= BUDGET_MAX ? `${formatYen(BUDGET_MAX)}以上` : formatYen(maxB)}
-            </span>
-          </div>
-          {/* 下限・上限の 2 つのつまみを持つスライダー（つまみ同士は 1 目盛り以上離す） */}
-          <Slider
-            min={BUDGET_MIN}
-            max={BUDGET_MAX}
-            step={BUDGET_STEP}
-            minStepsBetweenThumbs={1}
-            value={filters.budget}
-            thumbLabels={["予算の下限", "予算の上限"]}
-            onValueChange={(v) => onChange("budget", [v[0], v[1]])}
-          />
-        </div>
+        <BudgetField value={filters.budget} onChange={(v) => onChange("budget", v)} />
 
         {/* ジャンル */}
-        <fieldset className="space-y-3">
-          <legend className="mb-3 text-sm leading-none font-medium">
-            ジャンル
-            {/* 選択数（0 件なら「すべて」） */}
-            <span className="ml-2 text-xs font-normal text-muted-foreground">
-              {filters.genres.length === 0 ? "すべて" : `${filters.genres.length}件選択`}
-            </span>
-          </legend>
-          {genreOptions.length === 0 ? (
-            // 選択肢がないとき
-            <p className="text-xs text-muted-foreground">このエリアのジャンルはまだありません</p>
-          ) : (
-            // 2 列でチェックボックスを並べる
-            <div className="grid grid-cols-2 gap-x-3 gap-y-3">
-              {visibleGenres.map((g) => (
-                <div key={g.alias} className="flex min-w-0 items-center gap-2">
-                  {/* 選択中なら checked。c は true/false/"indeterminate" なので true のみ選択扱い */}
-                  <Checkbox
-                    id={`genre-${g.alias}`}
-                    checked={filters.genres.includes(g.alias)}
-                    onCheckedChange={(c) => toggleGenre(g.alias, c === true)}
-                  />
-                  {/* ジャンル名と件数（クリックでもチェック切り替え） */}
-                  <Label
-                    htmlFor={`genre-${g.alias}`}
-                    className="min-w-0 cursor-pointer font-normal"
-                    title={g.title}
-                  >
-                    <span className="truncate">{g.title}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                      {g.count}
-                    </span>
-                  </Label>
-                </div>
-              ))}
-            </div>
-          )}
-          {/* 選択肢が多いときは「もっと見る／閉じる」ボタンを出す */}
-          {genreOptions.length > GENRE_PREVIEW_COUNT && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => setShowAllGenres((v) => !v)}
-            >
-              {showAllGenres
-                ? "閉じる"
-                : `もっと見る（残り${genreOptions.length - GENRE_PREVIEW_COUNT}件）`}
-            </Button>
-          )}
-        </fieldset>
+        <GenreField
+          options={genreOptions}
+          selected={filters.genres}
+          onChange={(genres) => onChange("genres", genres)}
+          emptyMessage="このエリアのジャンルはまだありません"
+        />
 
         {/* 評価 */}
-        <div className="space-y-2">
-          <div className="flex items-baseline justify-between">
-            <Label>評価</Label>
-            {/* 初期値のままなら「指定なし」、それ以外は星と範囲 */}
-            <span className="flex items-center gap-1 text-sm font-medium tabular-nums text-primary">
-              {minR === RATING_MIN && maxR === RATING_MAX ? (
-                "指定なし"
-              ) : (
-                <>
-                  <Star className="size-3.5 fill-amber-400 text-amber-400" />
-                  {minR.toFixed(1)} 〜 {maxR.toFixed(1)}
-                </>
-              )}
-            </span>
-          </div>
-          {/* 評価の下限・上限スライダー（0.5 刻み） */}
-          <Slider
-            min={RATING_MIN}
-            max={RATING_MAX}
-            step={0.5}
-            value={filters.rating}
-            thumbLabels={["評価の下限", "評価の上限"]}
-            onValueChange={(v) => onChange("rating", [v[0], v[1]])}
-          />
-        </div>
+        <RatingField value={filters.rating} onChange={(v) => onChange("rating", v)} />
       </CardContent>
     </Card>
   )

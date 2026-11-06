@@ -49,6 +49,17 @@ PRICE_TO_BUDGET = {1: 1000, 2: 3000, 3: 7000, 4: 15000}
 # 価格帯が不明なときの目安予算（円）
 UNKNOWN_PRICE_BUDGET = 3000
 
+# 都道府県コード（JIS X 0401。Yelp の location.state に "13" のような文字列で入る）の順の都道府県名
+JP_PREFECTURES = (
+    "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+    "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+    "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県", "岐阜県", "静岡県", "愛知県",
+    "三重県", "滋賀県", "京都府", "大阪府", "兵庫県", "奈良県", "和歌山県",
+    "鳥取県", "島根県", "岡山県", "広島県", "山口県",
+    "徳島県", "香川県", "愛媛県", "高知県",
+    "福岡県", "佐賀県", "長崎県", "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
+)
+
 # 「駐車場あり」とみなす business_parking の種類（駐車場・立体駐車場・バレー・提携駐車場）。
 # street（路上駐車）は駐車場とはみなさない
 PARKING_KINDS = ("lot", "garage", "valet", "validated")
@@ -73,6 +84,21 @@ def has_parking(business_parking: object) -> Optional[bool]:
         return None
     # 駐車場の種類のどれかが True なら駐車場あり
     return any(business_parking.get(k) is True for k in PARKING_KINDS)
+
+
+def prefecture_name(location: dict) -> str:
+    """Yelp の location から都道府県名を求める。
+
+    引数:
+        location: Yelp の business の location（country と state を使う）
+    返り値:
+        都道府県名（日本以外、または state が都道府県コードでなければ空文字）
+    """
+    state = str(location.get("state") or "")
+    # 日本の店舗で、state が 1〜47 の数字なら都道府県名に変換する
+    if location.get("country") == "JP" and state.isdigit() and 1 <= int(state) <= len(JP_PREFECTURES):
+        return JP_PREFECTURES[int(state) - 1]
+    return ""
 
 
 def as_bool(value: object) -> Optional[bool]:
@@ -115,7 +141,8 @@ def to_shop(business: dict, prefecture: Optional[str], area: Optional[str]) -> d
     return {
         "id": business["id"],  # Yelp の店舗 ID
         "name": business.get("name", ""),  # 店名
-        "prefecture": prefecture or "",  # 都道府県（なければ空文字）
+        # 都道府県（検索で指定していなければ店舗住所の都道府県コードから。分からなければ空文字）
+        "prefecture": prefecture or prefecture_name(location),
         # エリア指定時はその名前、未指定（都道府県全域・現在地）なら店舗住所の city
         "area": area or location.get("city") or "",
         "distance": business.get("distance"),  # 検索中心からの距離（m）
@@ -230,7 +257,7 @@ async def get_shop(client: httpx.AsyncClient, business_id: str) -> Optional[dict
     # それ以外のエラー（本文の先頭 200 文字を含める）
     if res.status_code != 200:
         raise YelpError(f"Yelp API error {res.status_code}: {res.text[:200]}")
-    # 都道府県・エリアは検索条件がないので、店舗住所の city をエリアにする
+    # 都道府県・エリアは検索条件がないので、店舗住所の都道府県コードと city から求める
     return to_shop(res.json(), None, None)
 
 

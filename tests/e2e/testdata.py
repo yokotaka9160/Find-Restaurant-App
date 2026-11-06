@@ -23,6 +23,7 @@ def shop(
     lat: float,
     lng: float,
     area: str = "新宿",
+    prefecture: str = "東京都",
     distance: Optional[float] = None,
     along: Optional[float] = None,
     parking: Optional[bool] = None,
@@ -31,7 +32,7 @@ def shop(
     return {
         "id": id,
         "name": name,
-        "prefecture": "東京都",
+        "prefecture": prefecture,
         "area": area,
         "distance": distance,
         "along": along,
@@ -54,7 +55,7 @@ RAMEN = shop(
     "ramen-1", "麺屋 テスト", "ramen", "ラーメン", 1000, 4.5, 300, 35.6900, 139.7000,
     parking=True, good_for_groups=True,
 )
-CAFE = shop("cafe-1", "カフェ テスト", "cafes", "カフェ", 3000, 3.9, 50, 35.6850, 139.7300)
+CAFE = shop("cafe-1", "カフェ テスト", "cafes", "カフェ", 3000, 3.9, 50, 35.6850, 139.7300, area="渋谷")
 SUSHI = shop("sushi-1", "鮨 テスト", "sushi", "寿司", 15000, 4.8, 120, 35.6800, 139.7650)
 SHOPS = [RAMEN, CAFE, SUSHI]
 
@@ -106,10 +107,21 @@ def route_response(items: Optional[list[dict]] = None) -> dict:
 
 # ---- お気に入り（店舗 ID → 店舗情報） -----------------------------------------
 
+# 検索結果には出ず、お気に入りにだけ入っている店（エリアの絞り込みのテスト用）
+OSAKA = shop(
+    "osaka-1", "串カツ テスト", "kushikatsu", "串カツ", 2500, 4.2, 80, 34.6937, 135.5023,
+    prefecture="大阪府", area="大阪市", parking=True,
+)
+# お気に入りの絞り込み・並び替えのテストで保存しておく店舗 ID（新しく登録した順）
+#   都道府県: 東京都 3（新宿 2・渋谷 1）/ 大阪府 1
+#   現在地（渋谷駅付近）から 5km 以内: カフェ・麺屋
+#   駐車場あり: 串カツ・麺屋 / 大人数OK: 麺屋
+FAVORITE_IDS = ["osaka-1", "sushi-1", "cafe-1", "ramen-1"]
+
 
 def lookup_response(ids: list[str]) -> dict:
-    """/api/shops/lookup の応答。SHOPS にない ID は missing に入れる"""
-    by_id = {s["id"]: s for s in SHOPS}
+    """/api/shops/lookup の応答。SHOPS・OSAKA にない ID は missing に入れる"""
+    by_id = {s["id"]: s for s in [*SHOPS, OSAKA]}
     return {
         "items": [by_id[i] for i in ids if i in by_id],
         "missing": [i for i in ids if i not in by_id],
