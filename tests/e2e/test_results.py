@@ -21,6 +21,11 @@ def test_cards_show_shop_details(search_page: Page):
     expect(card.get_by_role("link", name="Yelpで見る")).to_have_attribute(
         "href", "https://www.yelp.com/biz/ramen-1"
     )
+    # 設備は「あり」と分かっているものだけ表示する
+    expect(card.get_by_role("list", name="設備")).to_contain_text("駐車場あり")
+    expect(card.get_by_role("list", name="設備")).to_contain_text("大人数OK")
+    cafe = results(page).get_by_role("listitem").filter(has_text="カフェ テスト")
+    expect(cafe.get_by_role("list", name="設備")).to_have_count(0)
 
 
 @pytest.mark.parametrize(

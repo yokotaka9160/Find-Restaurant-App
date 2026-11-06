@@ -134,21 +134,37 @@ function Home({ onStart }: { onStart: () => void }) {
   )
 }
 
+/** 画面の種類（ホーム・検索・お気に入り） */
+type Screen = "home" | "menu" | "favorites"
+
+/** 画面ごとの URL ハッシュ（ホームはハッシュなし） */
+const SCREEN_HASH: Record<Screen, string> = {
+  home: "",
+  menu: "main-menu",
+  favorites: "favorites",
+}
+
 /**
- * アプリのルートコンポーネント。URL のハッシュに応じてホーム画面と検索画面を切り替える。
+ * 現在の URL ハッシュから表示する画面を決める。
+ * @returns #main-menu なら検索、#favorites ならお気に入り、それ以外はホーム
+ */
+function screenFromHash(): Screen {
+  const hash = window.location.hash
+  return hash === "#main-menu" ? "menu" : hash === "#favorites" ? "favorites" : "home"
+}
+
+/**
+ * アプリのルートコンポーネント。URL のハッシュに応じてホーム・検索・お気に入りの画面を切り替える。
  * @returns 現在の画面の JSX（引数なし）
  */
 export default function App() {
-  // 表示中の画面。初期値は URL ハッシュが #main-menu なら検索画面、それ以外はホーム
-  const [screen, setScreen] = useState<"home" | "menu">(() =>
-    window.location.hash === "#main-menu" ? "menu" : "home",
-  )
+  // 表示中の画面。初期値は URL ハッシュから決める
+  const [screen, setScreen] = useState<Screen>(screenFromHash)
 
   // ブラウザの戻る/進むなどでハッシュが変わったときに画面を追従させる
   useEffect(() => {
     // ハッシュ変更時に、ハッシュから画面を決めて状態に反映する
-    const onHashChange = () =>
-      setScreen(window.location.hash === "#main-menu" ? "menu" : "home")
+    const onHashChange = () => setScreen(screenFromHash())
     // hashchange イベントを購読する
     window.addEventListener("hashchange", onHashChange)
     // アンマウント時に購読を解除する
@@ -157,12 +173,12 @@ export default function App() {
 
   /**
    * 画面を切り替える。
-   * @param next 遷移先の画面（"home" または "menu"）
+   * @param next 遷移先の画面
    * @returns なし
    */
-  const navigate = (next: "home" | "menu") => {
-    // URL ハッシュを書き換えて履歴に残す（ホームはハッシュなし）
-    window.location.hash = next === "menu" ? "main-menu" : ""
+  const navigate = (next: Screen) => {
+    // URL ハッシュを書き換えて履歴に残す
+    window.location.hash = SCREEN_HASH[next]
     // 画面の状態を更新する
     setScreen(next)
   }
@@ -172,7 +188,11 @@ export default function App() {
     // Start で検索画面へ
     <Home onStart={() => navigate("menu")} />
   ) : (
-    // 検索画面からホームへ戻れるようにする
-    <RestaurantSearch onHome={() => navigate("home")} />
+    // 検索とお気に入りは同じコンポーネントで切り替えるので、行き来しても検索条件が残る
+    <RestaurantSearch
+      onHome={() => navigate("home")}
+      showFavorites={screen === "favorites"}
+      onShowFavorites={(open) => navigate(open ? "favorites" : "menu")}
+    />
   )
 }

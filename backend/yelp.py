@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 # 「値または None」を表す型
 from typing import Optional
+# URL のパスに入れる文字列をエスケープする
+from urllib.parse import quote
 
 # 非同期 HTTP クライアント
 import httpx
@@ -20,6 +22,8 @@ from categories_ja import ja_title
 
 # Yelp の店舗検索 API の URL
 YELP_SEARCH_URL = "https://api.yelp.com/v3/businesses/search"
+# Yelp の店舗詳細 API の URL（末尾に店舗 ID を付ける）
+YELP_BUSINESS_URL = "https://api.yelp.com/v3/businesses"
 YELP_MAX_LIMIT = 50  # 1 リクエストで取得できる最大件数
 # 飲食店全体（Yelp の親カテゴリ）。ジャンルは結果の categories から作り、絞り込みは呼び出し側で行う
 YELP_CATEGORIES = "restaurants"
@@ -45,11 +49,41 @@ PRICE_TO_BUDGET = {1: 1000, 2: 3000, 3: 7000, 4: 15000}
 # 価格帯が不明なときの目安予算（円）
 UNKNOWN_PRICE_BUDGET = 3000
 
+# 「駐車場あり」とみなす business_parking の種類（駐車場・立体駐車場・バレー・提携駐車場）。
+# street（路上駐車）は駐車場とはみなさない
+PARKING_KINDS = ("lot", "garage", "valet", "validated")
+
 
 class YelpError(Exception):
     """Yelp API の呼び出しに失敗したことを表す例外（メッセージは日本語）"""
 
     pass
+
+
+def has_parking(business_parking: object) -> Optional[bool]:
+    """Yelp の business_parking 属性から、駐車場があるかを判定する。
+
+    引数:
+        business_parking: {"lot": bool, "garage": bool, "street": bool, ...} の dict（ない場合は None）
+    返り値:
+        PARKING_KINDS のいずれかが True なら True、すべて False なら False、情報がなければ None
+    """
+    # dict でなければ情報なし
+    if not isinstance(business_parking, dict):
+        return None
+    # 駐車場の種類のどれかが True なら駐車場あり
+    return any(business_parking.get(k) is True for k in PARKING_KINDS)
+
+
+def as_bool(value: object) -> Optional[bool]:
+    """真偽値ならそのまま、それ以外（属性がないなど）なら None を返す。
+
+    引数:
+        value: Yelp の属性の値
+    返り値:
+        True / False / None
+    """
+    return value if isinstance(value, bool) else None
 
 
 def to_shop(business: dict, prefecture: Optional[str], area: Optional[str]) -> dict:
@@ -76,6 +110,8 @@ def to_shop(business: dict, prefecture: Optional[str], area: Optional[str]) -> d
     address = " ".join(location.get("display_address", []))
     # 座標（ない場合は空 dict）
     coords = business.get("coordinates") or {}
+    # 設備などの属性（ない場合は空 dict）
+    attributes = business.get("attributes") or {}
     return {
         "id": business["id"],  # Yelp の店舗 ID
         "name": business.get("name", ""),  # 店名
@@ -96,6 +132,9 @@ def to_shop(business: dict, prefecture: Optional[str], area: Optional[str]) -> d
         ),
         "image": business.get("image_url") or "",  # 画像 URL（なければ空文字）
         "url": business.get("url"),  # Yelp の店舗ページ
+        "parking": has_parking(attributes.get("business_parking")),  # 駐車場の有無（不明なら None）
+        # 大人数で利用できるか（Yelp の「グループ向け」属性。不明なら None）
+        "good_for_groups": as_bool(attributes.get("restaurants_good_for_groups")),
     }
 
 
@@ -164,3 +203,50 @@ async def search_shops(
     shops = [to_shop(b, prefecture, area) for b in data.get("businesses", [])]
     # 総件数（なければ取得件数）と店舗リストを返す
     return int(data.get("total", len(shops))), shops
+
+
+async def get_shop(client: httpx.AsyncClient, business_id: str) -> Optional[dict]:
+    """Yelp の店舗詳細 API で 1 店舗の情報を取得し、Shop 形式で返す。
+
+    引数:
+        client: Authorization ヘッダー付きの HTTP クライアント（make_client で作る）
+        business_id: Yelp の店舗 ID
+    返り値:
+        Shop 形式の dict（店舗が見つからなければ None）
+    例外:
+        YelpError: 接続失敗・404 以外のエラー応答のとき
+    """
+    try:
+        # 店舗 ID は URL のパスに入れるのでエスケープする
+        res = await client.get(
+            f"{YELP_BUSINESS_URL}/{quote(business_id, safe='')}", params={"locale": "ja_JP"}
+        )
+    except httpx.HTTPError as e:
+        # 通信エラーは YelpError に変換する
+        raise YelpError(f"Yelp API に接続できません: {e}") from e
+    # 閉店・削除などで店舗が見つからない
+    if res.status_code == 404:
+        return None
+    # それ以外のエラー（本文の先頭 200 文字を含める）
+    if res.status_code != 200:
+        raise YelpError(f"Yelp API error {res.status_code}: {res.text[:200]}")
+    # 都道府県・エリアは検索条件がないので、店舗住所の city をエリアにする
+    return to_shop(res.json(), None, None)
+
+
+def make_client() -> httpx.AsyncClient:
+    """Yelp API 用の HTTP クライアントを作る（複数の店舗詳細をまとめて取得するときに共有する）。
+
+    引数: なし
+    返り値: API キーを Authorization ヘッダーに設定した httpx.AsyncClient
+    例外:
+        YelpError: API キーが設定されていないとき
+    """
+    # API キーを取得し、なければエラー
+    key = api_key()
+    if not key:
+        raise YelpError("YELP_API_KEY が設定されていません")
+    # タイムアウト 10 秒、Bearer トークン付きのクライアント
+    return httpx.AsyncClient(
+        timeout=10, headers={"Authorization": f"Bearer {key}", "Accept": "application/json"}
+    )

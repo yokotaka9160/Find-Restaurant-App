@@ -99,6 +99,27 @@ _GENRE_CATEGORY = {
 }
 
 
+# モック店舗の設備：id → (駐車場あり, 大人数OK)。Yelp と同じく、情報がない店舗は None
+_FACILITIES = {
+    1: (False, False),
+    2: (None, True),
+    3: (False, None),
+    4: (None, None),
+    5: (False, True),
+    6: (False, False),
+    7: (True, True),
+    8: (None, True),
+    9: (False, False),
+    10: (True, None),
+    11: (None, None),
+    12: (False, True),
+    13: (True, True),
+    14: (None, None),
+    15: (True, True),
+    16: (True, False),
+}
+
+
 def _jitter(i: int) -> float:
     """同じエリアの店が地図上で重ならないよう、id から決まる小さなずれ（±約500m）
 
@@ -122,9 +143,14 @@ SHOPS = [
         "lat": _AREA_COORDS[s["area"]][0] + _jitter(s["id"]),  # エリア中心の緯度 + ずれ
         "lng": _AREA_COORDS[s["area"]][1] + _jitter(s["id"] * 3),  # エリア中心の経度 + ずれ
         "image": GENRE_PHOTO[s["genre"]],  # ジャンルに応じた画像
+        "parking": _FACILITIES[s["id"]][0],  # 駐車場の有無
+        "good_for_groups": _FACILITIES[s["id"]][1],  # 大人数OK か
     }
     for s in _SEEDS
 ]
+
+# id → モック店舗（お気に入りの取得に使う）
+SHOPS_BY_ID = {s["id"]: s for s in SHOPS}
 
 
 def distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -170,8 +196,10 @@ def filter_shops(
     budget_min: Optional[int] = None,
     budget_max: Optional[int] = None,
     max_distance: Optional[float] = None,
+    parking: bool = False,
+    groups: bool = False,
 ) -> list[dict]:
-    """クエリ条件に合致する店舗だけを返す。未指定（None / 空）の条件は無視する。
+    """クエリ条件に合致する店舗だけを返す。未指定（None / 空 / False）の条件は無視する。
 
     引数:
         shops: 絞り込む店舗のリスト
@@ -181,6 +209,8 @@ def filter_shops(
         min_rating, max_rating: 評価の範囲
         budget_min, budget_max: 予算の範囲（円）
         max_distance: distance の上限（m）
+        parking: True なら駐車場ありの店舗だけ（情報がない店舗は除く）
+        groups: True なら大人数OK の店舗だけ（情報がない店舗は除く）
     返り値:
         条件に合う店舗のリスト
     """
@@ -207,6 +237,12 @@ def filter_shops(
             continue
         # 予算が上限超過なら除外
         if budget_max is not None and shop["budget"] > budget_max:
+            continue
+        # 駐車場ありを指定したとき、駐車場があると分かっている店舗以外は除外
+        if parking and shop.get("parking") is not True:
+            continue
+        # 大人数OK を指定したとき、大人数OK と分かっている店舗以外は除外
+        if groups and shop.get("good_for_groups") is not True:
             continue
         # すべての条件を満たした店舗を追加
         result.append(shop)

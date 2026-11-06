@@ -2,8 +2,9 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 // 画面で使う lucide-react のアイコンを読み込む
 import {
+  Car, // 駐車場
   ChevronLeft, // 戻る矢印
-  ImageOff, // 画像なし
+  Heart, // お気に入り
   LayoutGrid, // リスト表示
   Loader2, // 読み込み中
   LocateFixed, // 現在地
@@ -14,12 +15,11 @@ import {
   SearchX, // 該当なし
   SlidersHorizontal, // 絞り込み
   Star, // 評価の星
+  Users, // 大人数
   UtensilsCrossed, // ロゴ（フォークとナイフ）
   X, // 閉じる
 } from "lucide-react"
 
-// バッジ部品
-import { Badge } from "@/components/ui/badge"
 // ボタン部品
 import { Button } from "@/components/ui/button"
 // カード部品一式
@@ -40,10 +40,16 @@ import {
 } from "@/components/ui/select"
 // スライダー部品
 import { Slider } from "@/components/ui/slider"
+// お気に入りの一覧
+import FavoritesView from "@/components/FavoritesView"
+// 店舗カード
+import RestaurantCard from "@/components/RestaurantCard"
 // ルート検索の入力欄
 import RouteSearchFields from "@/components/RouteSearchFields"
 // 地方・都道府県データと、市区町村一覧を返す関数
 import { REGIONS, citiesOf } from "@/data/areas"
+// お気に入りを管理するフック
+import { useFavorites } from "@/hooks/useFavorites"
 // 現在地を取得するフック
 import { useGeolocation } from "@/hooks/useGeolocation"
 // 検索条件の定数・API 関数・整形関数・型
@@ -83,12 +89,28 @@ const GENRE_PREVIEW_COUNT = 12
 /* 画面本体：検索条件を useState で保持し、変更のたびに FastAPI から再取得する */
 /* ------------------------------------------------------------------ */
 
+/** RestaurantSearch の引数（props） */
+interface RestaurantSearchProps {
+  /** ホームへ戻るときに呼ばれる関数（省略時は戻るボタンを出さない） */
+  onHome?: () => void
+  /** true ならお気に入りの一覧を表示する（検索条件は保ったまま） */
+  showFavorites?: boolean
+  /** お気に入りの一覧を開く（true）・閉じる（false） */
+  onShowFavorites?: (open: boolean) => void
+}
+
 /**
- * 飲食店検索画面の本体。
- * @param onHome ホームへ戻るときに呼ばれる関数（省略時は戻るボタンを出さない）
- * @returns 検索画面の JSX
+ * 飲食店検索画面の本体。お気に入りの一覧も、検索条件を保ったままこの中で切り替えて表示する。
+ * @param props RestaurantSearchProps を参照
+ * @returns 検索画面（またはお気に入りの一覧）の JSX
  */
-export default function RestaurantSearch({ onHome }: { onHome?: () => void }) {
+export default function RestaurantSearch({
+  onHome,
+  showFavorites = false,
+  onShowFavorites,
+}: RestaurantSearchProps) {
+  // お気に入り（店舗 ID をブラウザに保存）
+  const favorites = useFavorites()
   // 検索条件
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS)
   // 並び順
@@ -212,10 +234,24 @@ export default function RestaurantSearch({ onHome }: { onHome?: () => void }) {
 
   return (
     <div className="min-h-screen bg-muted/30 text-foreground">
-      {/* 上部の固定ヘッダー */}
-      <Header onHome={onHome} />
+      {/* 上部の固定ヘッダー（お気に入りボタンで一覧の開閉を切り替える） */}
+      <Header
+        onHome={onHome}
+        favoritesCount={favorites.ids.length}
+        showFavorites={showFavorites}
+        onToggleFavorites={onShowFavorites && (() => onShowFavorites(!showFavorites))}
+      />
 
-      {/* 本文：PC では左に条件パネル（300px）、右に結果の 2 列 */}
+      {showFavorites ? (
+        // お気に入りの一覧（検索条件はこのコンポーネントの状態に残る）
+        <FavoritesView
+          ids={favorites.ids}
+          onToggle={favorites.toggle}
+          onRemove={favorites.remove}
+          onBack={() => onShowFavorites?.(false)}
+        />
+      ) : (
+      /* 本文：PC では左に条件パネル（300px）、右に結果の 2 列 */
       <main className="mx-auto grid max-w-6xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-[300px_1fr] lg:items-start lg:px-8">
         {/* モバイル：フィルタ開閉ボタン */}
         <Button
@@ -379,7 +415,13 @@ export default function RestaurantSearch({ onHome }: { onHome?: () => void }) {
               {/* 店舗ごとにカードを表示 */}
               {results.map((r) => (
                 <li key={r.id}>
-                  <RestaurantCard restaurant={r} distancePrefix={routeMode ? "ルートから" : ""} />
+                  <RestaurantCard
+                    restaurant={r}
+                    distancePrefix={routeMode ? "ルートから" : ""}
+                    favorite={favorites.isFavorite(r.id)}
+                    onToggleFavorite={() => favorites.toggle(r.id)}
+                    favoriteDisabled={!favorites.canAdd}
+                  />
                 </li>
               ))}
             </ul>
@@ -411,6 +453,7 @@ export default function RestaurantSearch({ onHome }: { onHome?: () => void }) {
           )}
         </section>
       </main>
+      )}
     </div>
   )
 }
@@ -419,12 +462,24 @@ export default function RestaurantSearch({ onHome }: { onHome?: () => void }) {
 /* ヘッダー                                                             */
 /* ------------------------------------------------------------------ */
 
+/** Header の引数（props） */
+interface HeaderProps {
+  /** ホームへ戻る関数（省略時は戻るボタンを出さない） */
+  onHome?: () => void
+  /** お気に入りの件数 */
+  favoritesCount: number
+  /** お気に入りの一覧を表示中か */
+  showFavorites: boolean
+  /** お気に入りの一覧の開閉を切り替える関数（省略時はお気に入りボタンを出さない） */
+  onToggleFavorites?: () => void
+}
+
 /**
- * 画面上部の固定ヘッダー（戻るボタン・ロゴ・説明文）。
- * @param onHome ホームへ戻る関数（省略時は戻るボタンを出さない）
+ * 画面上部の固定ヘッダー（戻るボタン・ロゴ・説明文・お気に入りボタン）。
+ * @param props HeaderProps を参照
  * @returns ヘッダーの JSX
  */
-function Header({ onHome }: { onHome?: () => void }) {
+function Header({ onHome, favoritesCount, showFavorites, onToggleFavorites }: HeaderProps) {
   return (
     // スクロールしても上部に固定し、背景を少し透かしてぼかす
     <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur">
@@ -442,10 +497,24 @@ function Header({ onHome }: { onHome?: () => void }) {
           </span>
           FindRestr
         </div>
-        {/* 説明文（スマホ幅では非表示） */}
-        <p className="ml-auto hidden text-sm text-muted-foreground sm:block">
+        {/* 説明文（PC 幅でのみ表示） */}
+        <p className="ml-auto hidden text-sm text-muted-foreground lg:block">
           エリア・ルート・予算・ジャンル・評価でお店を探す
         </p>
+        {/* お気に入りボタン（一覧の表示中は押された状態）。説明文がない幅では右端に寄せる */}
+        {onToggleFavorites && (
+          <Button
+            variant={showFavorites ? "secondary" : "outline"}
+            size="sm"
+            className="ml-auto shrink-0 lg:ml-0"
+            aria-pressed={showFavorites}
+            onClick={onToggleFavorites}
+          >
+            <Heart className={favoritesCount > 0 ? "fill-rose-500 text-rose-500" : ""} />
+            お気に入り
+            <span className="tabular-nums text-muted-foreground">{favoritesCount}</span>
+          </Button>
+        )}
       </div>
     </header>
   )
@@ -673,6 +742,35 @@ function FilterPanel({
           </div>
         )}
 
+        {/* 設備（駐車場・大人数） */}
+        <fieldset className="space-y-3">
+          <legend className="mb-3 text-sm leading-none font-medium">設備</legend>
+          {/* [検索条件の項目, id, 表示名, アイコン] の組からチェックボックスを作る */}
+          {(
+            [
+              ["parking", "facility-parking", "駐車場あり", Car],
+              ["groups", "facility-groups", "大人数（4人以上）OK", Users],
+            ] as const
+          ).map(([key, id, label, Icon]) => (
+            <div key={key} className="flex items-center gap-2">
+              {/* c は true/false/"indeterminate" なので true のみ選択扱い */}
+              <Checkbox
+                id={id}
+                checked={filters[key]}
+                onCheckedChange={(c) => onChange(key, c === true)}
+              />
+              <Label htmlFor={id} className="cursor-pointer font-normal">
+                <Icon className="size-4 text-muted-foreground" />
+                {label}
+              </Label>
+            </div>
+          ))}
+          {/* Yelp の情報がない店は条件に合うか分からないので除外されることを伝える */}
+          <p className="text-xs text-muted-foreground">
+            Yelp に設備の情報がないお店は表示されません
+          </p>
+        </fieldset>
+
         {/* 予算 */}
         <div className="space-y-2">
           <div className="flex items-baseline justify-between">
@@ -779,92 +877,7 @@ function FilterPanel({
 }
 
 /* ------------------------------------------------------------------ */
-/* 店舗カード                                                           */
-/* ------------------------------------------------------------------ */
-
-/**
- * 店舗 1 件ぶんのカード（画像・ジャンル・店名・場所・説明・評価・リンク）。
- * @param restaurant 表示する店舗
- * @param distancePrefix 距離の前に付ける説明
- * @returns カードの JSX
- */
-function RestaurantCard({
-  restaurant: r,
-  distancePrefix = "",
-}: {
-  restaurant: Restaurant
-  /** 距離の前に付ける説明（ルート検索なら「ルートから」） */
-  distancePrefix?: string
-}) {
-  // 画像を表示できないか（画像 URL が空なら最初から true）
-  const [imageFailed, setImageFailed] = useState(!r.image)
-
-  return (
-    <Card className="h-full gap-0 overflow-hidden py-0 transition-shadow hover:shadow-md">
-      {/* 画像エリア（16:10） */}
-      <div className="relative aspect-[16/10] bg-muted">
-        {imageFailed ? (
-          // 画像なしアイコン
-          <div className="grid h-full place-items-center text-muted-foreground">
-            <ImageOff />
-          </div>
-        ) : (
-          // 店舗画像（画面に近づいてから読み込む。失敗したら画像なし表示へ）
-          <img
-            src={r.image}
-            alt={`${r.name}の料理・店内`}
-            loading="lazy"
-            className="size-full object-cover"
-            onError={() => setImageFailed(true)}
-          />
-        )}
-        {/* 左上のジャンルバッジ */}
-        <Badge className="absolute top-3 left-3 bg-background/90 text-foreground backdrop-blur">
-          {r.genre}
-        </Badge>
-      </div>
-
-      <CardContent className="flex flex-1 flex-col gap-2 p-4">
-        {/* 店名 */}
-        <h3 className="leading-snug font-semibold">{r.name}</h3>
-        {/* 場所・距離・平均予算 */}
-        <p className="flex items-center gap-1 text-xs text-muted-foreground">
-          <MapPin className="size-3.5" />
-          {/* 都道府県と市区町村のうち空でないものをつなぐ（どちらも空なら「—」） */}
-          {[r.prefecture, r.area].filter(Boolean).join(" ") || "—"}
-          {/* 距離があれば表示 */}
-          {r.distance != null && `（${distancePrefix}${formatDistance(r.distance)}）`}
-          ｜平均 {formatYen(r.budget)}
-        </p>
-        {/* 説明文（2 行で省略） */}
-        <p className="line-clamp-2 text-sm text-muted-foreground">{r.description}</p>
-
-        {/* カード下部：評価とリンク */}
-        <div className="mt-auto flex items-center justify-between pt-3">
-          <span className="flex items-center gap-1 text-sm font-semibold tabular-nums">
-            <Star className="size-4 fill-amber-400 text-amber-400" />
-            {r.rating.toFixed(1)}
-            {/* レビュー件数（3 桁区切り） */}
-            <span className="text-xs font-normal text-muted-foreground">
-              ({r.review_count.toLocaleString("ja-JP")})
-            </span>
-          </span>
-          {/* Yelp ページがあればリンクボタン（新しいタブ） */}
-          {r.url && (
-            <Button variant="outline" size="sm" asChild>
-              <a href={r.url} target="_blank" rel="noreferrer">
-                Yelpで見る
-              </a>
-            </Button>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/* 該当なし                                                             */
+/* 該当なし                                                            */
 /* ------------------------------------------------------------------ */
 
 /**

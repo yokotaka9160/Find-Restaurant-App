@@ -25,6 +25,8 @@ def shop(
     area: str = "新宿",
     distance: Optional[float] = None,
     along: Optional[float] = None,
+    parking: Optional[bool] = None,
+    good_for_groups: Optional[bool] = None,
 ) -> dict:
     return {
         "id": id,
@@ -43,10 +45,15 @@ def shop(
         "description": f"{title}のお店",
         "image": "",  # 外部の画像を読み込まない
         "url": f"https://www.yelp.com/biz/{id}",
+        "parking": parking,
+        "good_for_groups": good_for_groups,
     }
 
 
-RAMEN = shop("ramen-1", "麺屋 テスト", "ramen", "ラーメン", 1000, 4.5, 300, 35.6900, 139.7000)
+RAMEN = shop(
+    "ramen-1", "麺屋 テスト", "ramen", "ラーメン", 1000, 4.5, 300, 35.6900, 139.7000,
+    parking=True, good_for_groups=True,
+)
 CAFE = shop("cafe-1", "カフェ テスト", "cafes", "カフェ", 3000, 3.9, 50, 35.6850, 139.7300)
 SUSHI = shop("sushi-1", "鮨 テスト", "sushi", "寿司", 15000, 4.8, 120, 35.6800, 139.7650)
 SHOPS = [RAMEN, CAFE, SUSHI]
@@ -95,6 +102,19 @@ ROUTE = {
 
 def route_response(items: Optional[list[dict]] = None) -> dict:
     return {**shops_response(ROUTE_SHOPS if items is None else items, total=230), "route": ROUTE}
+
+
+# ---- お気に入り（店舗 ID → 店舗情報） -----------------------------------------
+
+
+def lookup_response(ids: list[str]) -> dict:
+    """/api/shops/lookup の応答。SHOPS にない ID は missing に入れる"""
+    by_id = {s["id"]: s for s in SHOPS}
+    return {
+        "items": [by_id[i] for i in ids if i in by_id],
+        "missing": [i for i in ids if i not in by_id],
+        "source": "yelp",
+    }
 
 
 # ---- 地名検索 ---------------------------------------------------------------

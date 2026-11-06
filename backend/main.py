@@ -11,6 +11,9 @@
     GET /api/shops?lat=35.66&lng=139.70&radius=3000   # 現在地から radius（m）以内
     GET /api/shops/route?olat=35.68&olng=139.77&dlat=35.66&dlng=139.70&buffer=500  # ルートから buffer（m）以内
     GET /api/geocode?q=東京駅                           # 地名 → 座標の候補
+    GET /api/shops/lookup?id=xxx&id=yyy                 # 店舗 ID から最新の店舗情報（お気に入り用）
+
+/api/shops と /api/shops/route は parking=true（駐車場あり）・groups=true（大人数OK）でも絞り込める。
 """
 
 # 複数の Yelp 検索を並行実行するための asyncio
@@ -19,6 +22,8 @@ import asyncio
 import math
 # 環境変数を読むための os
 import os
+# 店舗 ID の形式チェックに使う正規表現
+import re
 # キャッシュの経過時間を測るための time
 import time
 # 固定値の型（Literal）と「値または None」の型（Optional）
@@ -38,7 +43,7 @@ import routing
 # Yelp API クライアント
 import yelp
 # モック店舗データと、絞り込み・ジャンル集計・距離付与の関数
-from shops import SHOPS, filter_shops, genre_facets, with_distance
+from shops import SHOPS, SHOPS_BY_ID, filter_shops, genre_facets, with_distance
 
 # ルート検索で Yelp を呼ぶ地点数の上限（API の呼び出し回数を抑える）
 ROUTE_MAX_SAMPLES = 10
@@ -46,6 +51,13 @@ ROUTE_MAX_SAMPLES = 10
 ROUTE_YELP_CONCURRENCY = 3
 # Yelp の検索半径の上限（m）
 YELP_MAX_RADIUS_M = 40000
+
+# お気に入りの店舗情報を 1 回で取得できる件数の上限（フロントの FAVORITES_MAX と合わせる）
+LOOKUP_MAX_IDS = 50
+# 店舗詳細の取得で同時に実行する Yelp リクエスト数の上限
+LOOKUP_YELP_CONCURRENCY = 3
+# Yelp の店舗 ID の形式（英数字・ハイフン・アンダースコア）
+BUSINESS_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # FastAPI アプリを作成する
 app = FastAPI(title="FindRestr API")
@@ -96,6 +108,8 @@ class Shop(BaseModel):
     description: str  # 説明文
     image: str  # 画像 URL
     url: Optional[str] = None  # Yelp の店舗ページ
+    parking: Optional[bool] = None  # 駐車場の有無（Yelp に情報がなければ None）
+    good_for_groups: Optional[bool] = None  # 大人数OK か（Yelp に情報がなければ None）
 
 
 class ShopsResponse(BaseModel):
@@ -120,6 +134,14 @@ class RouteShopsResponse(ShopsResponse):
     """/api/shops/route のレスポンス（ShopsResponse にルート情報を追加）"""
 
     route: RouteInfo
+
+
+class LookupResponse(BaseModel):
+    """/api/shops/lookup のレスポンス"""
+
+    items: list[Shop]  # 取得できた店舗（指定した ID の順）
+    missing: list[str]  # 見つからなかった店舗 ID（閉店・削除など）
+    source: Literal["yelp", "mock"]  # データの取得元
 
 
 class GeocodeResult(BaseModel):
@@ -164,6 +186,8 @@ async def list_shops(
     max_rating: float = Query(5, ge=0, le=5, description="評価の上限"),
     budget_min: Optional[int] = Query(None, ge=0, description="予算の下限（円）"),
     budget_max: Optional[int] = Query(None, ge=0, description="予算の上限（円）。未指定なら上限なし"),
+    parking: bool = Query(False, description="true なら駐車場ありの店だけ（Yelp に情報がない店は除く）"),
+    groups: bool = Query(False, description="true なら大人数（4人以上）OK の店だけ（Yelp に情報がない店は除く）"),
 ) -> ShopsResponse:
     """エリアまたは現在地周辺の店舗を検索し、条件で絞り込んで返す。
 
@@ -208,6 +232,8 @@ async def list_shops(
         max_rating=max_rating,
         budget_min=budget_min,
         budget_max=budget_max,
+        parking=parking,
+        groups=groups,
     )
     # レスポンスを組み立てて返す
     return ShopsResponse(total=total, items=items, genres=genre_facets(in_area), source=source)
@@ -225,6 +251,8 @@ async def route_shops(
     max_rating: float = Query(5, ge=0, le=5, description="評価の上限"),
     budget_min: Optional[int] = Query(None, ge=0, description="予算の下限（円）"),
     budget_max: Optional[int] = Query(None, ge=0, description="予算の上限（円）。未指定なら上限なし"),
+    parking: bool = Query(False, description="true なら駐車場ありの店だけ（Yelp に情報がない店は除く）"),
+    groups: bool = Query(False, description="true なら大人数（4人以上）OK の店だけ（Yelp に情報がない店は除く）"),
 ) -> RouteShopsResponse:
     """OSRM で出発地→目的地のルートを引き、ルートから buffer（m）以内の店舗を返す。
 
@@ -273,6 +301,8 @@ async def route_shops(
         max_rating=max_rating,
         budget_min=budget_min,
         budget_max=budget_max,
+        parking=parking,
+        groups=groups,
     )
     # レスポンスを組み立てて返す
     return RouteShopsResponse(
@@ -350,6 +380,92 @@ async def _route_candidates(
         return route, candidates, "yelp"
     # API キーがなければモックデータを候補にする
     return route, SHOPS, "mock"
+
+
+@app.get("/api/shops/lookup", response_model=LookupResponse)
+async def lookup_shops(
+    ids: list[str] = Query(..., alias="id", description=f"店舗 ID。複数指定可（最大 {LOOKUP_MAX_IDS} 件）"),
+) -> LookupResponse:
+    """店舗 ID から最新の店舗情報を返す（お気に入りの一覧表示用）。
+
+    Yelp の利用規約で店舗 ID 以外のデータは 24 時間を超えて保存できないため、
+    フロントは店舗 ID だけを保存し、一覧を開くたびにここで最新の情報を取得する。
+
+    引数: ids 店舗 ID のリスト（クエリパラメータ id を複数回指定）
+    返り値: 取得できた店舗（指定順）・見つからなかった店舗 ID・取得元
+    例外: HTTPException 422 件数超過・ID の形式が不正なとき、502 Yelp の呼び出しに失敗したとき
+    """
+    # 重複を除く（指定順は保つ）
+    ids = list(dict.fromkeys(ids))
+    # 件数の上限を超えたらエラー（Yelp の呼び出し回数を抑えるため）
+    if len(ids) > LOOKUP_MAX_IDS:
+        raise HTTPException(status_code=422, detail=f"一度に取得できるのは {LOOKUP_MAX_IDS} 件までです")
+    # ID の形式が不正ならエラー（URL のパスに入れるため）
+    if not all(BUSINESS_ID_PATTERN.match(i) for i in ids):
+        raise HTTPException(status_code=422, detail="店舗 ID の形式が正しくありません")
+
+    if not yelp.api_key():
+        # API キーがなければモックデータから探す
+        found = {i: SHOPS_BY_ID[i] for i in ids if i in SHOPS_BY_ID}
+        source = "mock"
+    else:
+        # キャッシュにない ID だけ Yelp から取得する
+        now = time.monotonic()
+        to_fetch = [i for i in ids if not (i in _lookup_cache and now - _lookup_cache[i][0] < LOOKUP_CACHE_TTL_S)]
+        if to_fetch:
+            # 同時実行数を制限するセマフォ
+            semaphore = asyncio.Semaphore(LOOKUP_YELP_CONCURRENCY)
+            try:
+                async with yelp.make_client() as client:
+
+                    async def fetch(business_id: str) -> Optional[dict]:
+                        """1 店舗の詳細を取得する（引数: 店舗 ID / 返り値: 店舗、見つからなければ None）"""
+                        async with semaphore:
+                            return await yelp.get_shop(client, business_id)
+
+                    # 並行して取得する
+                    shops = await asyncio.gather(*(fetch(i) for i in to_fetch))
+            except yelp.YelpError as e:
+                # Yelp の失敗は 502 として返す
+                raise HTTPException(status_code=502, detail=str(e)) from e
+            # 取得結果（見つからなかったものは None）をキャッシュする
+            for business_id, shop in zip(to_fetch, shops):
+                _cache_lookup(business_id, shop)
+        # キャッシュから見つかった店舗を集める
+        found = {i: _lookup_cache[i][1] for i in ids if _lookup_cache.get(i, (0, None))[1] is not None}
+        source = "yelp"
+
+    # 指定順に並べ、見つからなかった ID は missing に入れる
+    return LookupResponse(
+        items=[found[i] for i in ids if i in found],
+        missing=[i for i in ids if i not in found],
+        source=source,
+    )
+
+
+# 店舗詳細のキャッシュ。お気に入り一覧を開くたびに Yelp を呼び直さないため
+# （Yelp の利用規約で、店舗 ID 以外のデータは 24 時間を超えて保存できないので短めにする）
+LOOKUP_CACHE_TTL_S = 600  # 有効期限（秒）
+LOOKUP_CACHE_MAX = 500  # 最大件数
+# 店舗 ID → (取得時刻, 店舗。見つからなければ None)
+_lookup_cache: dict[str, tuple[float, Optional[dict]]] = {}
+
+
+def _cache_lookup(business_id: str, shop: Optional[dict]) -> None:
+    """店舗詳細をキャッシュに保存する（上限を超えたら一番古いものを捨てる）。
+
+    引数:
+        business_id: 店舗 ID
+        shop: 店舗（見つからなかった場合は None）
+    返り値: なし
+    """
+    # 上書きのときは位置を最新にするため、いったん消す
+    _lookup_cache.pop(business_id, None)
+    # 上限に達していたら一番古いものを捨てる
+    if len(_lookup_cache) >= LOOKUP_CACHE_MAX:
+        _lookup_cache.pop(next(iter(_lookup_cache)))
+    # 取得時刻とともに保存する
+    _lookup_cache[business_id] = (time.monotonic(), shop)
 
 
 @app.get("/api/geocode", response_model=list[GeocodeResult])

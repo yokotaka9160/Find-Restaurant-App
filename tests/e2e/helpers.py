@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Locator, Page, Request, Route
 
-from testdata import GEOCODE, route_response, shops_response
+from testdata import GEOCODE, lookup_response, route_response, shops_response
 
 API_URL = re.compile(r"^https?://[^/]+/api/")
 TILE_URL = re.compile(r"^https?://([a-z]\.)?tile\.openstreetmap\.org/")
@@ -28,6 +28,7 @@ class FakeApi:
             "/api/shops": (200, shops_response()),
             "/api/shops/route": (200, route_response()),
             "/api/geocode": (200, lambda q: GEOCODE.get(q["q"][0], [])),
+            "/api/shops/lookup": (200, lambda q: lookup_response(q.get("id", []))),
         }
         self.calls: list[tuple[str, dict[str, list[str]]]] = []
 

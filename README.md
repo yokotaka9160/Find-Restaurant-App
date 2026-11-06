@@ -14,10 +14,17 @@
 | ジャンル | 検索エリア内の店舗が持つ Yelp カテゴリを集計して選択肢を作成（件数順・日本語表記）。複数選択は OR 条件 |
 | 予算 | 1 人あたり ¥0〜¥20,000 以上の範囲指定（Yelp の価格帯 $〜$$$$ を円の目安に換算） |
 | 評価 | 下限・上限の範囲指定（0.0〜5.0、0.5 刻み） |
+| 設備 | 駐車場あり・大人数（4人以上）OK で絞り込み（Yelp の `business_parking`・`restaurants_good_for_groups` 属性。情報がない店は除外） |
+
+### お気に入り
+
+- 店舗カードのハートで登録・解除し、ヘッダーの「お気に入り」から一覧を表示（最大 50 件）
+- ログインなしで使えるよう、ブラウザ（localStorage）に**店舗 ID だけ**を保存し、一覧を開くたびに最新の情報を取得（Yelp の利用規約で、店舗 ID 以外のデータは 24 時間を超えて保存できないため）
+- 一覧から検索画面に戻っても、検索条件と結果はそのまま
 
 ### 表示
 
-- **リスト表示**：店舗カード（写真・ジャンル・エリア・距離・平均予算・評価・レビュー数・Yelp へのリンク）
+- **リスト表示**：店舗カード（写真・ジャンル・お気に入り・エリア・距離・平均予算・設備・評価・レビュー数・Yelp へのリンク）
 - **マップ表示**：店舗をマーカーで表示し、クリックで詳細を表示。現在地検索では検索範囲の円、ルート検索ではルート・出発地・目的地も表示
 - **並び替え**：おすすめ順（評価 × レビュー数）／評価の高い順／価格の安い順／高い順／ルート順（ルート検索時、出発地に近い順）
 - 検索条件の変更は自動で反映（250ms デバウンス・古いリクエストは破棄）
@@ -89,10 +96,11 @@ flowchart LR
 | --- | --- |
 | `GET /api/shops` | エリア検索（`prefecture`, `area`）・現在地検索（`lat`, `lng`, `radius`） |
 | `GET /api/shops/route` | ルート検索（`olat`, `olng`, `dlat`, `dlng`, `buffer`）。ルートの座標・距離・所要時間も返す |
+| `GET /api/shops/lookup` | 店舗 ID から最新の店舗情報（`id`・複数可・最大 50 件）。お気に入りの一覧用。見つからない ID は `missing` で返す |
 | `GET /api/geocode` | 地名 → 座標の候補（`q`） |
 | `GET /api/health` | ヘルスチェック（データの取得元 `yelp` / `mock` を返す） |
 
-共通の絞り込みパラメータ：`genre`（Yelp カテゴリ alias・複数可）、`min_rating`, `max_rating`, `budget_min`, `budget_max`。
+`/api/shops` と `/api/shops/route` に共通の絞り込みパラメータ：`genre`（Yelp カテゴリ alias・複数可）、`min_rating`, `max_rating`, `budget_min`, `budget_max`, `parking`, `groups`（`true` で駐車場あり・大人数OK）。
 詳細は起動後の http://localhost:8000/docs（Swagger UI）を参照してください。
 
 ### ディレクトリ構成
@@ -103,19 +111,24 @@ flowchart LR
 │   ├── App.tsx                   # ホーム画面と検索画面の切り替え
 │   ├── components/
 │   │   ├── ShopSearch.tsx        # 検索画面（検索条件・結果一覧・状態管理）
+│   │   ├── RestaurantCard.tsx    # 店舗カード（検索結果・お気に入りで共通）
+│   │   ├── FavoritesView.tsx     # お気に入りの一覧
 │   │   ├── ShopMap.tsx           # 地図表示（Leaflet）
 │   │   ├── RouteSearchFields.tsx # ルート検索の入力（出発地・目的地・距離）
 │   │   └── ui/                   # shadcn/ui コンポーネント
-│   ├── hooks/useGeolocation.ts   # 現在地の取得
+│   ├── hooks/
+│   │   ├── useGeolocation.ts     # 現在地の取得
+│   │   └── useFavorites.ts       # お気に入り（店舗 ID を localStorage に保存）
 │   └── data/
 │       ├── restaurants.ts        # 型・検索条件・API クライアント
 │       └── areas.ts              # 都道府県・市区町村
 ├── backend/                      # バックエンド（FastAPI）
 │   ├── main.py                   # エンドポイント
-│   ├── yelp.py                   # Yelp Fusion API クライアント
+│   ├── yelp.py                   # Yelp Fusion API クライアント（検索・店舗詳細・設備の判定）
 │   ├── routing.py                # OSRM・Nominatim・ルートからの距離計算
 │   ├── shops.py                  # 絞り込み・ジャンル集計・サンプルデータ
 │   └── categories_ja.py          # Yelp カテゴリの日本語名
+├── docs/                         # 要件定義書・設計書
 ├── tests/e2e/                    # フロントエンドの E2E テスト（pytest + Playwright）
 ├── Dockerfile                    # フロントエンド（dev / build / prod）
 ├── docker-compose.yml            # 本番相当
@@ -140,6 +153,8 @@ flowchart LR
 - 予算は Yelp の価格帯（$〜$$$$）を円の目安（¥1,000 / ¥3,000 / ¥7,000 / ¥15,000）に換算しています。
 - Yelp はカテゴリ名を英語で返すため、`backend/categories_ja.py` の対訳で日本語にしています。対訳がないものは英語のまま表示されます。
 - 1 回の検索で Yelp から取得するのは最大 50 件（ルート検索は最大 10 地点 × 50 件）です。ジャンルの選択肢もこの範囲から作ります。
+- 設備（駐車場・大人数）の情報は Yelp の登録状況に依存し、地方では情報がない店が多くあります。情報がない店は、設備で絞り込むと表示されません。
+- 「駐車場あり」は駐車場・立体駐車場・バレーパーキング・提携駐車場のいずれかがある店です（路上駐車のみの店は含めません）。「大人数OK」は Yelp の「グループ向け」属性です。
 
 ## Docker で起動
 
@@ -180,8 +195,9 @@ API の応答はテスト内で固定の JSON に差し替えるため、Yelp・
 | --- | --- |
 | `test_home.py` | ホーム画面 ↔ 検索画面 |
 | `test_area_search.py` | 都道府県・市区町村、現在地周辺（半径の変更・解除・位置情報の拒否） |
-| `test_filters.py` | ジャンル（複数選択・もっと見る）、予算、評価、リセット |
-| `test_results.py` | カード表示、並び替え、マップ表示、該当なし、API エラーと再読み込み |
+| `test_filters.py` | ジャンル（複数選択・もっと見る）、予算、評価、設備、リセット |
+| `test_results.py` | カード表示（設備を含む）、並び替え、マップ表示、該当なし、API エラーと再読み込み |
+| `test_favorites.py` | 登録と一覧、再読み込み後も残る、一覧からの解除、検索条件が残る、取得できない店の削除、取得エラー |
 | `test_route_search.py` | 地名検索、現在地を出発地に、入れ替え、ルートからの距離、ルート順、ルートが見つからない場合 |
 
 ```bash
@@ -208,4 +224,6 @@ FRONTEND_URL=http://localhost:8080 .venv/bin/pytest
 ```bash
 curl "http://localhost:8000/api/shops?prefecture=東京都&area=新宿&min_rating=4"
 curl "http://localhost:8000/api/shops/route?olat=35.6896&olng=139.7006&dlat=35.6812&dlng=139.7671&buffer=500"
+curl "http://localhost:8000/api/shops?prefecture=東京都&parking=true&groups=true"
+curl "http://localhost:8000/api/shops/lookup?id=7&id=1"   # サンプルデータの店舗 ID
 ```

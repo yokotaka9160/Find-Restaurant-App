@@ -56,6 +56,10 @@ export interface Restaurant {
   image: string
   /** Yelp の店舗ページ */
   url?: string | null
+  /** 駐車場の有無。Yelp に情報がなければ null */
+  parking?: boolean | null
+  /** 大人数（4人以上）OK か（Yelp の「グループ向け」属性）。Yelp に情報がなければ null */
+  good_for_groups?: boolean | null
 }
 
 /* ------------------------------------------------------------------ */
@@ -123,6 +127,10 @@ export interface SearchFilters {
   genres: string[]
   /** 評価の範囲 [下限, 上限]。[0, 5] は「指定なし」 */
   rating: [number, number]
+  /** true なら駐車場ありの店だけ */
+  parking: boolean
+  /** true なら大人数（4人以上）OK の店だけ */
+  groups: boolean
 }
 
 /** 検索条件の初期値（リセット時にもこの値に戻す） */
@@ -138,6 +146,8 @@ export const DEFAULT_FILTERS: SearchFilters = {
   budget: [BUDGET_MIN, BUDGET_MAX], // 予算は指定なし
   genres: [], // ジャンルは指定なし
   rating: [RATING_MIN, RATING_MAX], // 評価は指定なし
+  parking: false, // 駐車場は指定なし
+  groups: false, // 大人数は指定なし
 }
 
 /** 並び順のキー */
@@ -258,6 +268,19 @@ export interface RouteInfo {
   duration_s: number
 }
 
+/** /api/shops/lookup のレスポンス */
+export interface LookupResponse {
+  /** 取得できた店舗（指定した ID の順） */
+  items: Restaurant[]
+  /** 見つからなかった店舗 ID（閉店・削除など） */
+  missing: string[]
+  /** データの取得元 */
+  source: "yelp" | "mock"
+}
+
+/** お気に入りに登録できる件数の上限（backend の LOOKUP_MAX_IDS と合わせる） */
+export const FAVORITES_MAX = 50
+
 /** 地名検索（ジオコーディング）の結果 1 件 */
 export interface GeocodeResult extends GeoPoint {
   /** 地名・住所の表示名 */
@@ -332,9 +355,25 @@ export async function fetchShops(
   const [minBudget, maxBudget] = filters.budget
   if (minBudget > BUDGET_MIN) params.set("budget_min", String(minBudget))
   if (maxBudget < BUDGET_MAX) params.set("budget_max", String(maxBudget))
+  // 設備の条件は指定したときだけパラメータにする
+  if (filters.parking) params.set("parking", "true")
+  if (filters.groups) params.set("groups", "true")
 
   // ルート検索かどうかでエンドポイントを切り替えて取得する
   return getJson(route ? "/api/shops/route" : "/api/shops", params, signal)
+}
+
+/**
+ * 店舗 ID から最新の店舗情報を取得する（お気に入りの一覧表示用）
+ * @param ids 店舗 ID の配列（最大 FAVORITES_MAX 件）
+ * @param signal リクエストを中断するための AbortSignal（省略可）
+ * @returns 取得できた店舗と、見つからなかった店舗 ID
+ */
+export function lookupShops(ids: string[], signal?: AbortSignal): Promise<LookupResponse> {
+  // id=... を複数付けて /api/shops/lookup を呼ぶ
+  const params = new URLSearchParams()
+  ids.forEach((id) => params.append("id", id))
+  return getJson("/api/shops/lookup", params, signal)
 }
 
 /**

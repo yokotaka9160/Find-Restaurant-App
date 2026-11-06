@@ -43,12 +43,13 @@ def test_show_more_genres(page: Page, api: FakeApi, open_search):
     api.respond("/api/shops", shops_response(genres=MANY_GENRES))
     open_search()
     panel = filter_panel(page)
-    expect(panel.get_by_role("checkbox")).to_have_count(12)
+    genres = panel.locator("button[role='checkbox'][id^='genre-']")  # 設備のチェックボックスは数えない
+    expect(genres).to_have_count(12)
 
     panel.get_by_role("button", name="もっと見る（残り3件）").click()
-    expect(panel.get_by_role("checkbox")).to_have_count(15)
+    expect(genres).to_have_count(15)
     panel.get_by_role("button", name="閉じる").click()
-    expect(panel.get_by_role("checkbox")).to_have_count(12)
+    expect(genres).to_have_count(12)
 
 
 def test_budget_range(search_page: Page):
@@ -82,6 +83,17 @@ def test_rating_range(search_page: Page):
         upper.focus()
         upper.press("ArrowLeft")
     expect(filter_panel(page)).to_contain_text("4.0 〜 4.5")
+
+
+def test_facility_filters(search_page: Page):
+    page = search_page
+    with page.expect_request(api_request("/api/shops", parking="true", groups=None)):
+        page.locator("#facility-parking").click()
+    with page.expect_request(api_request("/api/shops", parking="true", groups="true")):
+        page.locator("#facility-groups").click()
+
+    with page.expect_request(api_request("/api/shops", parking=None, groups="true")):
+        page.locator("#facility-parking").click()
 
 
 def test_reset(search_page: Page):
